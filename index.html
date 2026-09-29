@@ -82,6 +82,8 @@
   .swatch .chip i:nth-child(3) { flex: 1; }
   .swname { display: block; margin-top: 7px; font: italic 13px/1 var(--serif); color: var(--muted); }
   .swatch[aria-checked="true"] { border-color: var(--line-strong); }
+  .fruits { grid-template-columns: repeat(3, auto); margin-bottom: 14px; }
+  .fruits .swname { margin-top: 0; }
   .swatch[aria-checked="true"] .swname { color: var(--ink); }
   .swatch:focus-visible, .btn:focus-visible, input:focus-visible + .box, summary:focus-visible, input[type=range]:focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; }
 
@@ -158,7 +160,7 @@
     .notes { grid-area: notes; width: auto; margin: 14px var(--gutter) 0; background: transparent; }
     .notes .body { max-height: none; }
   }
-  @media (max-height: 760px) and (min-width: 861px) {
+  @media (max-height: 860px) and (min-width: 861px) {
     .panel { padding: 14px 16px 12px; top: calc(var(--gutter) + 48px); }
     .panel header { padding-bottom: 10px; }
     .group { padding: 11px 0; }
@@ -205,6 +207,8 @@
       </div>
     </div>
     <div class="group">
+      <span class="label">Fruit</span>
+      <div class="swatches fruits" id="fruits" role="radiogroup" aria-label="Fruit"></div>
       <span class="label">Variety</span>
       <div class="swatches" id="swatches" role="radiogroup" aria-label="Colour variety"></div>
     </div>
@@ -249,7 +253,7 @@
     <div class="body">
       <h3>A body made of tetrahedra</h3>
       <p>The slice is a volumetric mesh of <span class="num" id="nParticles">—</span> particles and <span class="num" id="nTets">—</span> tetrahedra, solved with XPBD on a fixed 60&nbsp;Hz step split into 10 substeps. Each tetrahedron is pulled, with finite compliance, toward its best-fit rotated rest shape — a co-rotational elastic constraint that also flips inverted elements back out — and carries a volume constraint that keeps the jelly close to incompressible, so a stretched slice necks in like the real thing.</p>
-      <p>Tetrahedra in the rind are roughly three times stiffer than the flesh. Damping acts only on relative velocity along the mesh edges, so the slice still falls and tumbles freely while its wobble dies away. Ground contact projects particles out of the floor with Coulomb-style friction; the grab is a soft attachment on a patch of particles, bounded in reach.</p>
+      <p>Tetrahedra in the rind or peel are up to roughly three times stiffer than the flesh. Damping acts only on relative velocity along the mesh edges, so the slice still falls and tumbles freely while its wobble dies away. Ground contact projects particles out of the floor with Coulomb-style friction; the grab is a soft attachment on a patch of particles, bounded in reach.</p>
       <h3>Cutting</h3>
       <p>Every piece is a convex outline in the slice’s original rest plane, with rounded corners. Your stroke, read on the surface it was drawn over, fixes a vertical blade plane. For each piece it crosses, the piece’s current pose is fitted with a best rotation, the plane is carried back into rest space and becomes a straight line, and the outline is split along it — the two halves are prebuilt as fresh tetrahedral meshes the moment you let go. Then the steel knife comes down: its edge first presses a groove into the jelly, and when it breaks through the new pieces are swapped in, taking over the position and speed of the flesh they came from, while the blade wedges the faces apart on its way to the board. The blade is drawn behind the jelly surface, so the part that is buried in it is seen refracted. Each piece is its own soft body — grab it, stretch it, cut it again — and pieces push against each other instead of passing through.</p>
       <h3>A surface that rides along</h3>
@@ -262,21 +266,50 @@
 <script type="module">
 // ===== geometry.js =====
 // ─────────────────────────────────────────────────────────────
-//  Geometry: rounded watermelon wedge, tetrahedral sim mesh,
-//  smooth render surface, seeds and bubbles, and the barycentric
-//  embedding that ties every render vertex to a tetrahedron.
+//  Geometry: rounded fruit profiles (a melon wedge, a strawberry
+//  half, a whole apple), tetrahedral sim mesh, smooth render surface,
+//  seeds and bubbles, and the barycentric embedding that ties
+//  every render vertex to a tetrahedron.
 // ─────────────────────────────────────────────────────────────
 
-const SHAPE = {
-  alpha: 32 * Math.PI / 180, // half angle of the wedge
-  Ri: 1.62,                  // inner sector radius (before rounding)
-  rho: 0.17,                 // in-plane corner rounding
-  T: 0.58,                   // thickness
-  bevel: 0.13,               // rounding of the top / bottom edges
-  skin: 0.075,               // green skin band depth
-  pale: 0.25,                // skin + pale layer depth
+// kind selects the shader's region rule: 0 melon, 1 strawberry, 2 apple
+const FRUITS = {
+  melon: {
+    name: 'Melon', kind: 0,
+    shape: pie({
+      alpha: 32 * Math.PI / 180, // half angle of the wedge
+      Ri: 1.62,                  // inner sector radius (before rounding)
+      rho: 0.17,                 // in-plane corner rounding
+      T: 0.58,                   // thickness
+      bevel: 0.13,               // rounding of the top / bottom edges
+      skin: 0.075,               // green skin band depth
+      pale: 0.25,                // skin + pale layer depth
+    }),
+    outline: pieOutline, region: rindRegion, seeds: melonSeeds, bubbles: pieBubbles,
+  },
+  strawberry: {
+    name: 'Strawberry', kind: 1,
+    shape: {
+      prof: [0.2, 0.75, 1.0, 1.84], // tip radius, shoulder radius, tip → shoulder, flat calyx end
+      rho: 0.17, T: 0.55, bevel: 0.13,
+      skin: 0.03,                // thin red skin
+      pale: 0.42,                // depth where the whitish heart begins
+    },
+    outline: capsuleOutline, region: berryRegion, seeds: berrySeeds, bubbles: capsuleBubbles,
+  },
+  apple: {
+    name: 'Apple', kind: 2,
+    shape: {
+      prof: [1.0, 0.82, 1.8, 1.16], // axis at w = 1, radius at the widest point, height (= T), height of the widest point
+      rho: 0.17, T: 1.8, bevel: 0.05, layers: 5,
+      skin: 0.03,                // peel depth
+      pale: 0.3,                 // core radius around the centre
+    },
+    outline: discOutline, region: appleRegion, lift: appleLift, seeds: applePips, bubbles: appleBubbles,
+  },
 };
-SHAPE.Ro = SHAPE.Ri + SHAPE.rho;
+function pie(s) { s.Ro = s.Ri + s.rho; return s; }
+let FRUIT = FRUITS.melon, SHAPE = FRUIT.shape;
 
 // seeded PRNG so the specimen is identical on each load
 function rng(seed) {
@@ -825,15 +858,79 @@ function buildKnifeMesh() {
 //  the rind / pith / flesh shading and seeds stay exactly where they were.
 // ─────────────────────────────────────────────────────────────
 
-const RC = SHAPE.rho;          // corner radius of every piece outline
+let RC = SHAPE.rho;            // corner radius of every piece outline
 const MIN_INNER_AREA = 0.004;
 
-function initialPiece() {
-  const { alpha: a, Ri } = SHAPE;
+function useFruit(id) {
+  FRUIT = FRUITS[id]; SHAPE = FRUIT.shape; RC = SHAPE.rho; PROPS = null;
+}
+
+function initialPiece() { return { I: FRUIT.outline(SHAPE), cache: null }; }
+
+function pieOutline(S) {
+  const { alpha: a, Ri } = S;
   const I = [[0, 0]];
   const a0 = Math.PI / 2 - a, a1 = Math.PI / 2 + a, n = 40;
   for (let k = 0; k <= n; k++) { const t = a0 + (a1 - a0) * k / n; I.push([Math.cos(t) * Ri, Math.sin(t) * Ri]); }
-  return { I, cache: null };
+  return I;
+}
+
+// strawberry: an uneven capsule (tip circle r1 centred at w = r1, shoulder circle r2 a distance h further) cut flat at the calyx
+function sdCapsule(u, w, [r1, r2, h, top]) {
+  const px = Math.abs(u), py = w - r1;
+  const b = (r1 - r2) / h, a = Math.sqrt(1 - b * b), k = -b * px + a * py;
+  const d = k < 0 ? Math.hypot(px, py) - r1 : k > a * h ? Math.hypot(px, py - h) - r2 : a * px + b * py - r1;
+  return Math.max(d, w - top);
+}
+function capsuleOutline(S) {
+  const [r1, r2, h, top] = S.prof, pts = [];
+  for (const [c, r] of [[r1, r1 - RC], [r1 + h, r2 - RC]]) {
+    const n = Math.max(8, Math.ceil(2 * Math.PI * r / 0.06));
+    for (let k = 0; k < n; k++) pts.push([Math.cos(2 * Math.PI * k / n) * r, c + Math.sin(2 * Math.PI * k / n) * r]);
+  }
+  return clipHalf(convexHull(pts), 0, 1, top - RC);
+}
+
+// Andrew's monotone chain, counter-clockwise
+function convexHull(P) {
+  P = P.slice().sort((p, q) => p[0] - q[0] || p[1] - q[1]);
+  const cr = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lo = [], hi = [];
+  for (const p of P) { while (lo.length > 1 && cr(lo[lo.length - 2], lo[lo.length - 1], p) <= 0) lo.pop(); lo.push(p); }
+  for (let i = P.length - 1; i >= 0; i--) { const p = P[i]; while (hi.length > 1 && cr(hi[hi.length - 2], hi[hi.length - 1], p) <= 0) hi.pop(); hi.push(p); }
+  return lo.slice(0, -1).concat(hi.slice(0, -1));
+}
+
+// per-particle material region: 0 flesh, 1 pale / core / thin skin, 2 rind or peel
+function rindRegion(u, w, S) { const d = S.Ro - Math.hypot(u, w); return d < S.skin + 0.03 ? 2 : d < S.pale ? 1 : 0; }
+function berryRegion(u, w, S) { return -sdCapsule(u, w, S.prof) < S.skin + 0.03 ? 1 : 0; }
+// the apple's core is measured from its centre, not from the skin
+function appleRegion(u, w, S, y) {
+  const [wc, R, , yb] = S.prof, [lo, hi] = appleY(u, w, S.prof), rho = Math.hypot(u, w - wc);
+  return Math.min(R - rho, hi - y, y - lo) < S.skin + 0.03 ? 2 : Math.hypot(rho, (y - yb + 0.25) * 0.6) < S.pale ? 1 : 0;
+}
+
+// The whole apple stands on the rest plane, stem up: a disc outline whose lower and upper surfaces are height fields.
+// A lobed base with a calyx dimple, a long taper out to the widest point, broad shoulders and a stem cavity.
+function discOutline(S) {
+  const [wc, R] = S.prof, r = R - RC, n = 64, I = [];
+  for (let k = 0; k < n; k++) { const t = 2 * Math.PI * k / n; I.push([Math.cos(t) * r, wc + Math.sin(t) * r]); }
+  return I;
+}
+function appleY(u, w, [wc, R, H, yb]) {
+  const dw = w - wc, rho = Math.hypot(u, dw), s = Math.min(rho / R, 1), lobe = 0.5 - 0.5 * Math.cos(5 * Math.atan2(u, dw));
+  const x = Math.min(Math.max((s - 0.68) / 0.32, 0), 1);
+  return [
+    (yb - 0.12) * Math.asin(x) * 2 / Math.PI + 0.1 * Math.exp(-rho * rho / 0.02) + 0.06 * lobe * Math.exp(-(((s - 0.68) / 0.15) ** 2)),
+    yb + 0.12 + (H - yb - 0.12) * Math.sqrt(1 - s ** 3) - 0.22 * Math.exp(-rho * rho / 0.045) + 0.03 * (1 - lobe) * Math.exp(-(((rho - 0.42) / 0.14) ** 2)),
+  ];
+}
+// t ∈ [0, 1] across the slab's thickness → height between the apple's two surfaces; the sim pads toward the rim,
+// where the surfaces curve fastest, so its coarse tets still enclose the smooth render surface
+function appleLift(u, w, t, S, pad = 0) {
+  const [lo, hi] = appleY(u, w, S.prof), s = Math.min(Math.hypot(u, w - S.prof[0]) / S.prof[1], 1);
+  const pt = pad * s ** 6, pb = pt + pad * 1.25 * Math.sin(Math.PI * Math.min(Math.max((s - 0.68) / 0.32, 0), 1));
+  return lo - pb + (hi - lo + pt + pb) * t;
 }
 
 function polyArea(P) {
@@ -925,8 +1022,8 @@ function bboxLattice(I, pad, spacing, keep) {
 }
 
 // ── per-piece simulation mesh: Delaunay of the outline, extruded into prisms → tets ──
-function buildPieceSim(I, h = 0.15, layers = 3) {
-  const { T, Ro, skin, pale } = SHAPE;
+function buildPieceSim(I, h = 0.15, layers = SHAPE.layers || 3) {
+  const { T } = SHAPE;
   const bs = pieceSamples(I, h, 0.5);
   const P2 = [];
   for (const s of bs) {
@@ -953,7 +1050,7 @@ function buildPieceSim(I, h = 0.15, layers = 3) {
   const rest = new Float32Array(n2 * nL * 3);
   for (let l = 0; l < nL; l++) for (let i = 0; i < n2; i++) {
     const k = (l * n2 + i) * 3;
-    rest[k] = v2[2 * i]; rest[k + 1] = T * l / layers; rest[k + 2] = v2[2 * i + 1];
+    rest[k] = v2[2 * i]; rest[k + 1] = FRUIT.lift ? FRUIT.lift(v2[2 * i], v2[2 * i + 1], l / layers, SHAPE, 0.12) : T * l / layers; rest[k + 2] = v2[2 * i + 1];
   }
   const tets = [];
   for (let l = 0; l < layers; l++) for (let i = 0; i < tris.length; i += 3) {
@@ -963,37 +1060,92 @@ function buildPieceSim(I, h = 0.15, layers = 3) {
   }
   for (let t = 0; t < tets.length; t += 4) if (tetVolume(rest, tets[t], tets[t + 1], tets[t + 2], tets[t + 3]) < 0) { const tmp = tets[t + 2]; tets[t + 2] = tets[t + 3]; tets[t + 3] = tmp; }
   const nP = n2 * nL, region = new Uint8Array(nP);
-  for (let i = 0; i < nP; i++) {
-    const depth = Ro - Math.hypot(rest[3 * i], rest[3 * i + 2]);
-    region[i] = depth < skin + 0.03 ? 2 : depth < pale ? 1 : 0;
-  }
+  for (let i = 0; i < nP; i++) region[i] = FRUIT.region(rest[3 * i], rest[3 * i + 2], SHAPE, rest[3 * i + 1]);
   return { rest, tets: new Uint32Array(tets), region };
 }
 
 // ── seeds and bubbles, generated once in the shared rest frame ──
 let PROPS = null;
-function globalProps() {
-  if (PROPS) return PROPS;
-  const { T } = SHAPE;
-  const R = rng(9);
-  const list = [];
+// a seed is { c, ax (long axis, wide end forward), lx (lateral), up (thin axis), L, W, H, tilt }
+function melonSeeds(R, S) {
   const seeds = [];
   const rows = [{ r: 0.46, n: 2 }, { r: 0.68, n: 3 }, { r: 0.9, n: 4 }, { r: 1.12, n: 5 }, { r: 1.33, n: 5 }];
   for (const face of [1, -1]) for (const row of rows) {
-    const maxTh = SHAPE.alpha - (0.12 + 0.07) / row.r - 0.02;
+    const maxTh = S.alpha - (0.12 + 0.07) / row.r - 0.02;
     for (let i = 0; i < row.n; i++) {
       const t = row.n === 1 ? 0 : (i / (row.n - 1)) * 2 - 1;
       seeds.push({ r: row.r + (R() - 0.5) * 0.08, th: t * maxTh * 0.88 + (R() - 0.5) * 0.06 + (face < 0 ? 0.05 : 0), face, s: 0.85 + R() * 0.3 });
     }
   }
   seeds.push({ r: 0.9, th: 0.12, face: 0, s: 0.9 }, { r: 1.12, th: -0.2, face: 0, s: 0.8 });
-  const nt = 10, nph = 12;
-  for (const sd of seeds) {
+  return seeds.map(sd => {
     const L = 0.15 * sd.s, W = 0.088 * sd.s, H = 0.042 * sd.s;
-    const cx = Math.sin(sd.th) * sd.r, cz = Math.cos(sd.th) * sd.r;
-    const ax = [Math.sin(sd.th), 0, Math.cos(sd.th)], lx = [Math.cos(sd.th), 0, -Math.sin(sd.th)];
     const tilt = (R() - 0.5) * 0.25;
-    const cy = sd.face > 0 ? T - H * 0.64 : sd.face < 0 ? H * 0.64 : T * (0.35 + R() * 0.25);
+    const cy = sd.face > 0 ? S.T - H * 0.64 : sd.face < 0 ? H * 0.64 : S.T * (0.35 + R() * 0.25);
+    return { c: [Math.sin(sd.th) * sd.r, cy, Math.cos(sd.th) * sd.r], ax: [Math.sin(sd.th), 0, Math.cos(sd.th)], lx: [Math.cos(sd.th), 0, -Math.sin(sd.th)], up: [0, 1, 0], L, W, H, tilt };
+  });
+}
+// achenes sit just under the skin, in staggered columns all the way round the wall
+function berrySeeds(R, S) {
+  const ring = pieceSamples(capsuleOutline(S), 0.02, 0.1), seeds = [];
+  const at = (s, d) => [s.q[0] + s.n[0] * d, s.q[1] + s.n[1] * d];
+  let run = 0, col = 0;
+  for (let i = 0; i < ring.length; i++) {
+    const s = ring[i], p = at(s, RC), q = at(ring[(i + 1) % ring.length], RC);
+    run += Math.hypot(q[0] - p[0], q[1] - p[1]);
+    if (run < 0.11) continue;
+    run = 0; col++;
+    for (const y of col % 2 ? [0.3, 0.7] : [0.5]) {
+      const c = at(s, RC - 0.05 - R() * 0.008);
+      seeds.push({ c: [c[0], S.T * (y + (R() - 0.5) * 0.08), c[1]], ax: [-s.n[1], 0, s.n[0]], lx: [0, 1, 0], up: [s.n[0], 0, s.n[1]], L: 0.05, W: 0.032, H: 0.024, tilt: (R() - 0.5) * 0.4 });
+    }
+  }
+  return seeds;
+}
+// two plump pips either side of the core's centre, pointed ends toward the stem, and the stem itself (seed-dark, clubbed tip)
+function applePips(R, S) {
+  const [wc, , H, yb] = S.prof;
+  return [[-1, 0.03], [1, -0.04]].map(([sg, dz]) => ({
+    c: [sg * 0.1, yb - 0.25 + dz, wc + dz], ax: [sg * 0.28, -0.96, 0], lx: [0.96, sg * 0.28, 0], up: [0, 0, 1],
+    L: 0.13, W: 0.075, H: 0.055, tilt: (R() - 0.5) * 0.25,
+  })).concat({ c: [0.03, H - 0.02, wc], ax: [0.12, 0.9928, 0], lx: [0.9928, -0.12, 0], up: [0, 0, 1], L: 0.5, W: 0.05, H: 0.05, tilt: 0 });
+}
+function appleBubbles(R, S) {
+  const [wc, Rm, , yb] = S.prof, bub = [];
+  while (bub.length < 8) {
+    const u = (R() * 2 - 1) * Rm, w = wc + (R() * 2 - 1) * Rm, t = 0.2 + R() * 0.6, rho = Math.hypot(u, w - wc);
+    const y = appleLift(u, w, t, S);
+    if (rho > Rm * 0.6 || Math.hypot(rho, (y - yb + 0.25) * 0.6) < S.pale + 0.08) continue;
+    bub.push([u, y, w, 0.009 + R() * R() * 0.02]);
+  }
+  return bub;
+}
+function pieBubbles(R, S) {
+  const { T } = S, bub = [];
+  for (let i = 0; i < 9; i++) {
+    const r = 0.45 + R() * 0.85, th = (R() * 2 - 1) * (S.alpha - 0.14 / r) * 0.9;
+    const rad = 0.009 + R() * R() * 0.02, y = R() < 0.6 ? T - 0.035 - R() * 0.16 : 0.05 + R() * 0.14;
+    bub.push([Math.sin(th) * r, y, Math.cos(th) * r, rad]);
+  }
+  bub.push([0.22, T - 0.06, 0.45, 0.012], [-0.2, T - 0.09, 1.05, 0.016]);
+  return bub;
+}
+function capsuleBubbles(R, S) {
+  const { T, prof: [, r2, , top] } = S, bub = [];
+  while (bub.length < 8) {
+    const u = (R() * 2 - 1) * r2, w = R() * top;
+    if (sdCapsule(u, w, S.prof) > -S.bevel - 0.05) continue;
+    bub.push([u, R() < 0.6 ? T - 0.035 - R() * 0.16 : 0.05 + R() * 0.14, w, 0.009 + R() * R() * 0.02]);
+  }
+  return bub;
+}
+
+function globalProps() {
+  if (PROPS) return PROPS;
+  const R = rng(9);
+  const list = [];
+  const nt = 10, nph = 12;
+  for (const { c, ax, lx, up: uy, L, W, H, tilt } of FRUIT.seeds(R, SHAPE)) {
     const pos = [], nrm = [], idx = [];
     for (let i = 0; i <= nt; i++) {
       const t = Math.PI * i / nt, s = (1 - Math.cos(t)) / 2;
@@ -1001,25 +1153,18 @@ function globalProps() {
       for (let j = 0; j < nph; j++) {
         const ph = 2 * Math.PI * j / nph;
         const la = Math.cos(ph) * prof * W / 2, up = Math.sin(ph) * prof * H / 2, al = (s - 0.5) * L, upT = up + al * tilt * 0.3;
-        pos.push(cx + ax[0] * al + lx[0] * la, cy + upT, cz + ax[2] * al + lx[2] * la);
-        nrm.push(ax[0] * al / L + lx[0] * la / W, upT / H, ax[2] * al / L + lx[2] * la / W);
+        pos.push(c[0] + ax[0] * al + lx[0] * la + uy[0] * upT, c[1] + ax[1] * al + lx[1] * la + uy[1] * upT, c[2] + ax[2] * al + lx[2] * la + uy[2] * upT);
+        nrm.push(ax[0] * al / L + lx[0] * la / W + uy[0] * upT / H, ax[1] * al / L + lx[1] * la / W + uy[1] * upT / H, ax[2] * al / L + lx[2] * la / W + uy[2] * upT / H);
       }
     }
     for (let i = 0; i < nt; i++) for (let j = 0; j < nph; j++) {
       const a = i * nph + j, bb = i * nph + (j + 1) % nph, c = a + nph, d = bb + nph;
       idx.push(a, bb, c, bb, d, c);
     }
-    list.push({ mat: 1, cx, cz, rad: L * 0.5, pos, nrm, idx });
+    list.push({ mat: 1, cx: c[0], cz: c[2], rad: L * 0.5, pos, nrm, idx });
   }
-  const bub = [];
-  for (let i = 0; i < 9; i++) {
-    const r = 0.45 + R() * 0.85, th = (R() * 2 - 1) * (SHAPE.alpha - 0.14 / r) * 0.9;
-    const rad = 0.009 + R() * R() * 0.02, y = R() < 0.6 ? T - 0.035 - R() * 0.16 : 0.05 + R() * 0.14;
-    bub.push([Math.sin(th) * r, y, Math.cos(th) * r, rad]);
-  }
-  bub.push([0.22, T - 0.06, 0.45, 0.012], [-0.2, T - 0.09, 1.05, 0.016]);
   const bs = 8, bp = 12;
-  for (const [x, y, z, r] of bub) {
+  for (const [x, y, z, r] of FRUIT.bubbles(R, SHAPE)) {
     const pos = [], nrm = [], idx = [];
     for (let i = 0; i <= bs; i++) {
       const t = Math.PI * i / bs;
@@ -1061,8 +1206,10 @@ function buildPieceRender(I) {
   }
   const inset = RC - b, capPts = [];
   for (const s of samples) capPts.push(s.q[0] + s.n[0] * inset, s.q[1] + s.n[1] * inset);
-  const sp = 0.048;
-  const cp = capPts.concat(bboxLattice(I, RC, sp, (u, w) => sdPiece(I, u, w, b) < -sp * 0.6));
+  const sp = 0.048, lift = FRUIT.lift;
+  let cp = capPts.concat(bboxLattice(I, RC, sp, (u, w) => sdPiece(I, u, w, b) < (lift ? -0.1 : 0) - sp * 0.6));
+  // a lifted surface is steep near the rim: resolve it with a finer lattice there
+  if (lift) cp = cp.concat(bboxLattice(I, RC, 0.016, (u, w) => { const d = sdPiece(I, u, w, b); return d < -0.006 && d > -0.1; }));
   const ctri = delaunay(cp);
   const topRing = ringStart[rings.length - 1], botRing = ringStart[0];
   const topMap = [], botMap = [];
@@ -1075,6 +1222,7 @@ function buildPieceRender(I) {
     body.push(topMap[a], topMap[c2], topMap[c1]);
     body.push(botMap[a], botMap[c1], botMap[c2]);
   }
+  if (lift) for (let k = 0; k < pos.length; k += 3) pos[k + 1] = lift(pos[k], pos[k + 2], pos[k + 1] / T, SHAPE);
   // seeds and bubbles that sit wholly inside this piece
   for (const pr of globalProps()) {
     if (sdPiece(I, pr.cx, pr.cz) + pr.rad > -0.02) continue;
@@ -1730,9 +1878,10 @@ struct U {
   stripe: vec4f,
   seed: vec4f,
   shape: vec4f,      // T, Ro, skinDepth, paleDepth
-  misc: vec4f,       // exposure, meshAlpha, floorY, unused
+  misc: vec4f,       // exposure, meshAlpha, floorY, fruit kind
   bg: vec4f,
   shadowTint: vec4f,
+  prof: vec4f,       // strawberry: r1, r2, r1 → r2, flat end · apple: axis w, radius, height, widest point
 };
 
 const PI = 3.14159265;
@@ -2013,6 +2162,29 @@ fn toUV(p: vec3f) -> vec2f {
   return vec2f(n.x * 0.5 + 0.5, 0.5 - n.y * 0.5);
 }
 
+// the strawberry outline (sdCapsule in geometry.js)
+fn sdCapsule(q: vec2f) -> f32 {
+  let r1 = u.prof.x; let r2 = u.prof.y; let h = u.prof.z;
+  let p = vec2f(abs(q.x), q.y - r1);
+  let b = (r1 - r2) / h; let a = sqrt(1.0 - b * b);
+  let k = dot(p, vec2f(-b, a));
+  var d = dot(p, vec2f(a, b)) - r1;
+  if (k < 0.0) { d = length(p) - r1; } else if (k > a * h) { d = length(p - vec2f(0.0, h)) - r2; }
+  return max(d, q.y - u.prof.w);
+}
+// the whole apple's lower and upper surface heights (appleY in geometry.js)
+fn appleY(q: vec2f) -> vec2f {
+  let H = u.prof.z; let yb = u.prof.w;
+  let d = q - vec2f(0.0, u.prof.x);
+  let rho = length(d); let s = min(rho / u.prof.y, 1.0);
+  let lobe = 0.5 - 0.5 * cos(5.0 * atan2(d.x, d.y));
+  let x = clamp((s - 0.68) / 0.32, 0.0, 1.0);
+  let sb = (s - 0.68) / 0.15; let sc = (rho - 0.42) / 0.14;
+  return vec2f(
+    (yb - 0.12) * asin(x) * 2.0 / PI + 0.1 * exp(-rho * rho / 0.02) + 0.06 * lobe * exp(-sb * sb),
+    yb + 0.12 + (H - yb - 0.12) * sqrt(max(1.0 - s * s * s, 0.0)) - 0.22 * exp(-rho * rho / 0.045) + 0.03 * (1.0 - lobe) * exp(-sc * sc));
+}
+
 @fragment fn fsJelly(i: VOut, @builtin(front_facing) ff: bool) -> @location(0) vec4f {
   var N = normalize(i.n);
   if (!ff) { N = -N; }
@@ -2025,20 +2197,29 @@ fn toUV(p: vec3f) -> vec2f {
   // ── material regions from rest-space coordinates (they deform with the body) ──
   let Q = i.rest;
   let T = u.shape.x; let Ro = u.shape.y;
+  let kind = u.misc.w;
+  let melon = 1.0 - step(0.5, kind);
   let r = length(Q.xz);
   let th = atan2(Q.x, Q.z);
   let wob = (fbm(vec3f(th * 9.0, Q.y * 3.0, 1.7)) - 0.5);
-  let depth = Ro - r + wob * 0.018;
+  // the melon wears its rind on the outer arc only; strawberry and apple are skinned all the way round
+  var depth = select(Ro - r, -sdCapsule(Q.xz), kind > 0.5);
+  let rho = length(Q.xz - vec2f(0.0, u.prof.x));
+  if (kind > 1.5) { let ab = appleY(Q.xz); depth = min(u.prof.y - rho, min(ab.y - Q.y, Q.y - ab.x)); }
+  depth += wob * 0.018;
   let skinW = 1.0 - smoothstep(u.shape.z - 0.008, u.shape.z + 0.01, depth);
   let paleEdge = u.shape.w + wob * 0.035;
-  let paleW = (1.0 - smoothstep(paleEdge - 0.035, paleEdge + 0.035, depth)) * (1.0 - skinW);
+  var paleW = (1.0 - smoothstep(paleEdge - 0.035, paleEdge + 0.035, depth)) * (1.0 - skinW);
+  // the pale layer is the strawberry's whitish heart and the apple's core
+  if (kind > 1.5) { paleW = (1.0 - smoothstep(paleEdge - 0.04, paleEdge + 0.04, length(vec2f(rho, (Q.y - u.prof.w + 0.25) * 0.6)))) * (1.0 - skinW); }
+  else if (kind > 0.5) { paleW = smoothstep(paleEdge - 0.07, paleEdge + 0.07, depth) * (1.0 - skinW); }
   let fleshW = 1.0 - skinW - paleW;
 
   // irregular stripes running across the rind, pole to pole
   let sn = fbm(vec3f(th * 5.0, Q.y * 2.2, 3.0));
   let stripeF = sin(th * 34.0 + sn * 7.0 + fbm(vec3f(th * 22.0, Q.y * 7.0, 9.0)) * 2.5);
-  let stripe = smoothstep(-0.05, 0.35, stripeF) * smoothstep(0.1, 0.02, depth);
-  let speck = smoothstep(0.62, 0.8, vnoise(vec3f(th * 160.0, Q.y * 40.0, 2.0)));
+  let stripe = smoothstep(-0.05, 0.35, stripeF) * smoothstep(0.1, 0.02, depth) * melon;
+  let speck = smoothstep(0.62, 0.8, vnoise(vec3f(th * 160.0, Q.y * 40.0, 2.0))) * melon;
   var skinCol = mix(u.skin.rgb, u.stripe.rgb, clamp(stripe + speck * 0.35, 0.0, 1.0));
   // the cut face shows a lighter green inner skin band
   skinCol = mix(skinCol, mix(u.skin.rgb, u.pale.rgb, 0.35), smoothstep(0.02, 0.07, depth) * 0.6);
@@ -2230,7 +2411,7 @@ const M4 = {
 };
 
 const MSAA = 4;
-const UBO_SIZE = 544;
+const UBO_SIZE = 560;
 
 class Renderer {
   static async create(canvas, mesh, simEdges, nParticles) {
@@ -2472,12 +2653,13 @@ class Renderer {
     u.set([...palette.fleshDeep, 1], 100);
     u.set([...palette.pale, 1], 104);
     u.set([...palette.skin, 1], 108);
-    u.set([...palette.stripe, 1], 112);
+    u.set([...(palette.stripe || palette.skin), 1], 112);
     u.set([...palette.seed, 1], 116);
     u.set(params.shape, 120);
-    u.set([params.exposure, params.meshAlpha, 0, 0], 124);
+    u.set([params.exposure, params.meshAlpha, 0, params.kind], 124);
     u.set([...params.bg, 1], 128);
     u.set([...palette.shadowTint, 1], 132);
+    u.set(params.prof, 136);
     this.device.queue.writeBuffer(this.ubo, 0, u);
     this.device.queue.writeBuffer(this.lightUbo, 0, light.lightVP);
     this.device.queue.writeBuffer(this.topUbo, 0, light.topVP);
@@ -2606,7 +2788,7 @@ layout(std140) uniform U {
   mat4 viewProj; mat4 view; mat4 invViewProj; mat4 lightVP; mat4 topVP;
   vec4 camPos; vec4 camFwd; vec4 keyDir; vec4 screen;
   vec4 flesh; vec4 fleshDeep; vec4 pale; vec4 skin; vec4 stripe; vec4 seed;
-  vec4 shape; vec4 misc; vec4 bg; vec4 shadowTint;
+  vec4 shape; vec4 misc; vec4 bg; vec4 shadowTint; vec4 prof;
 } u;
 const float PI = 3.14159265;
 vec4 clipGL(vec4 c) { c.z = c.z * 2.0 - c.w; return c; }
@@ -2825,6 +3007,25 @@ uniform sampler2D sceneTex; uniform sampler2D backTex;
 in vec3 vWp; in vec3 vN; in vec3 vRest; in float vMat;
 layout(location=0) out vec4 oC;
 vec2 toUV(vec3 p) { vec4 c = u.viewProj * vec4(p, 1.0); return c.xy / c.w * 0.5 + 0.5; }
+float sdCapsule(vec2 q) {
+  float r1 = u.prof.x, r2 = u.prof.y, h = u.prof.z;
+  vec2 p = vec2(abs(q.x), q.y - r1);
+  float b = (r1 - r2) / h, a = sqrt(1.0 - b * b);
+  float k = dot(p, vec2(-b, a));
+  float d = k < 0.0 ? length(p) - r1 : k > a * h ? length(p - vec2(0.0, h)) - r2 : dot(p, vec2(a, b)) - r1;
+  return max(d, q.y - u.prof.w);
+}
+vec2 appleY(vec2 q) {
+  float H = u.prof.z, yb = u.prof.w;
+  vec2 d = q - vec2(0.0, u.prof.x);
+  float rho = length(d), s = min(rho / u.prof.y, 1.0);
+  float lobe = 0.5 - 0.5 * cos(5.0 * atan(d.x, d.y));
+  float x = clamp((s - 0.68) / 0.32, 0.0, 1.0);
+  float sb = (s - 0.68) / 0.15, sc = (rho - 0.42) / 0.14;
+  return vec2(
+    (yb - 0.12) * asin(x) * 2.0 / PI + 0.1 * exp(-rho * rho / 0.02) + 0.06 * lobe * exp(-sb * sb),
+    yb + 0.12 + (H - yb - 0.12) * sqrt(max(1.0 - s * s * s, 0.0)) - 0.22 * exp(-rho * rho / 0.045) + 0.03 * (1.0 - lobe) * exp(-sc * sc));
+}
 void main() {
   vec3 N = normalize(vN);
   if (!gl_FrontFacing) N = -N;
@@ -2836,19 +3037,26 @@ void main() {
 
   vec3 Q = vRest;
   float Ro = u.shape.y;
+  float kind = u.misc.w;
+  float melon = 1.0 - step(0.5, kind);
   float r = length(Q.xz);
   float th = atan(Q.x, Q.z);
   float wob = fbm(vec3(th * 9.0, Q.y * 3.0, 1.7)) - 0.5;
-  float depth = Ro - r + wob * 0.018;
+  float depth = kind > 0.5 ? -sdCapsule(Q.xz) : Ro - r;
+  float rho = length(Q.xz - vec2(0.0, u.prof.x));
+  if (kind > 1.5) { vec2 ab = appleY(Q.xz); depth = min(u.prof.y - rho, min(ab.y - Q.y, Q.y - ab.x)); }
+  depth += wob * 0.018;
   float skinW = 1.0 - smoothstep(u.shape.z - 0.008, u.shape.z + 0.01, depth);
   float paleEdge = u.shape.w + wob * 0.035;
   float paleW = (1.0 - smoothstep(paleEdge - 0.035, paleEdge + 0.035, depth)) * (1.0 - skinW);
+  if (kind > 1.5) paleW = (1.0 - smoothstep(paleEdge - 0.04, paleEdge + 0.04, length(vec2(rho, (Q.y - u.prof.w + 0.25) * 0.6)))) * (1.0 - skinW);
+  else if (kind > 0.5) paleW = smoothstep(paleEdge - 0.07, paleEdge + 0.07, depth) * (1.0 - skinW);
   float fleshW = 1.0 - skinW - paleW;
 
   float sn = fbm(vec3(th * 5.0, Q.y * 2.2, 3.0));
   float stripeF = sin(th * 34.0 + sn * 7.0 + fbm(vec3(th * 22.0, Q.y * 7.0, 9.0)) * 2.5);
-  float stripe = smoothstep(-0.05, 0.35, stripeF) * smoothstep(0.1, 0.02, depth);
-  float speck = smoothstep(0.62, 0.8, vnoise(vec3(th * 160.0, Q.y * 40.0, 2.0)));
+  float stripe = smoothstep(-0.05, 0.35, stripeF) * smoothstep(0.1, 0.02, depth) * melon;
+  float speck = smoothstep(0.62, 0.8, vnoise(vec3(th * 160.0, Q.y * 40.0, 2.0))) * melon;
   vec3 skinCol = mix(u.skin.rgb, u.stripe.rgb, clamp(stripe + speck * 0.35, 0.0, 1.0));
   skinCol = mix(skinCol, mix(u.skin.rgb, u.pale.rgb, 0.35), smoothstep(0.02, 0.07, depth) * 0.6);
 
@@ -3187,12 +3395,13 @@ class GLRenderer {
     u.set([...palette.fleshDeep, 1], 100);
     u.set([...palette.pale, 1], 104);
     u.set([...palette.skin, 1], 108);
-    u.set([...palette.stripe, 1], 112);
+    u.set([...(palette.stripe || palette.skin), 1], 112);
     u.set([...palette.seed, 1], 116);
     u.set(params.shape, 120);
-    u.set([params.exposure, params.meshAlpha, 0, 0], 124);
+    u.set([params.exposure, params.meshAlpha, 0, params.kind], 124);
     u.set([...params.bg, 1], 128);
     u.set([...palette.shadowTint, 1], 132);
+    u.set(params.prof, 136);
     const gl = this.gl;
     gl.bindBuffer(gl.UNIFORM_BUFFER, this.ubo);
     gl.bufferSubData(gl.UNIFORM_BUFFER, 0, u);
@@ -3336,28 +3545,76 @@ const srgbToLin = c => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055,
 const linToSrgb = c => (c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055);
 const hex = rgb => '#' + rgb.map(c => Math.round(Math.min(1, Math.max(0, linToSrgb(c))) * 255).toString(16).padStart(2, '0')).join('');
 
-// three coordinated varieties (linear RGB)
+// three coordinated varieties per fruit (linear RGB); only the melon has a stripe colour
 const PALETTES = {
-  crimson: {
-    name: 'Crimson',
-    flesh: [0.93, 0.07, 0.11], fleshDeep: [0.42, 0.018, 0.035],
-    pale: [0.8, 0.86, 0.62], skin: [0.03, 0.13, 0.035], stripe: [0.005, 0.034, 0.01],
-    seed: [0.01, 0.0065, 0.005], shadowTint: [0.6, 0.47, 0.46],
-    ui: { flesh: [0.62, 0.03, 0.06] },
+  melon: {
+    crimson: {
+      name: 'Crimson',
+      flesh: [0.93, 0.07, 0.11], fleshDeep: [0.42, 0.018, 0.035],
+      pale: [0.8, 0.86, 0.62], skin: [0.03, 0.13, 0.035], stripe: [0.005, 0.034, 0.01],
+      seed: [0.01, 0.0065, 0.005], shadowTint: [0.6, 0.47, 0.46],
+      ui: { flesh: [0.62, 0.03, 0.06] },
+    },
+    golden: {
+      name: 'Golden',
+      flesh: [0.97, 0.52, 0.05], fleshDeep: [0.6, 0.24, 0.012],
+      pale: [0.84, 0.88, 0.64], skin: [0.04, 0.15, 0.03], stripe: [0.007, 0.04, 0.01],
+      seed: [0.012, 0.008, 0.005], shadowTint: [0.64, 0.55, 0.44],
+      ui: { flesh: [0.72, 0.3, 0.02] },
+    },
+    rose: {
+      name: 'Rosé',
+      flesh: [0.95, 0.2, 0.3], fleshDeep: [0.6, 0.08, 0.15],
+      pale: [0.84, 0.9, 0.72], skin: [0.06, 0.2, 0.1], stripe: [0.012, 0.06, 0.03],
+      seed: [0.014, 0.009, 0.007], shadowTint: [0.64, 0.5, 0.52],
+      ui: { flesh: [0.72, 0.16, 0.24] },
+    },
   },
-  golden: {
-    name: 'Golden',
-    flesh: [0.97, 0.52, 0.05], fleshDeep: [0.6, 0.24, 0.012],
-    pale: [0.84, 0.88, 0.64], skin: [0.04, 0.15, 0.03], stripe: [0.007, 0.04, 0.01],
-    seed: [0.012, 0.008, 0.005], shadowTint: [0.64, 0.55, 0.44],
-    ui: { flesh: [0.72, 0.3, 0.02] },
+  strawberry: {
+    ripe: {
+      name: 'Ripe',
+      flesh: [0.9, 0.05, 0.07], fleshDeep: [0.5, 0.02, 0.035],
+      pale: [0.93, 0.62, 0.6], skin: [0.42, 0.012, 0.02],
+      seed: [0.5, 0.3, 0.05], shadowTint: [0.62, 0.45, 0.45],
+      ui: { flesh: [0.66, 0.03, 0.05] },
+    },
+    garden: {
+      name: 'Garden',
+      flesh: [0.95, 0.16, 0.1], fleshDeep: [0.62, 0.07, 0.04],
+      pale: [0.95, 0.8, 0.72], skin: [0.6, 0.035, 0.02],
+      seed: [0.55, 0.38, 0.08], shadowTint: [0.64, 0.5, 0.46],
+      ui: { flesh: [0.78, 0.12, 0.06] },
+    },
+    pineberry: {
+      name: 'Pineberry',
+      flesh: [0.95, 0.86, 0.76], fleshDeep: [0.76, 0.56, 0.5],
+      pale: [0.97, 0.93, 0.87], skin: [0.85, 0.62, 0.5],
+      seed: [0.45, 0.02, 0.02], shadowTint: [0.66, 0.6, 0.56],
+      ui: { flesh: [0.8, 0.62, 0.54] },
+    },
   },
-  rose: {
-    name: 'Rosé',
-    flesh: [0.95, 0.2, 0.3], fleshDeep: [0.6, 0.08, 0.15],
-    pale: [0.84, 0.9, 0.72], skin: [0.06, 0.2, 0.1], stripe: [0.012, 0.06, 0.03],
-    seed: [0.014, 0.009, 0.007], shadowTint: [0.64, 0.5, 0.52],
-    ui: { flesh: [0.72, 0.16, 0.24] },
+  apple: {
+    ruby: {
+      name: 'Ruby',
+      flesh: [0.95, 0.86, 0.55], fleshDeep: [0.78, 0.62, 0.32],
+      pale: [0.56, 0.38, 0.17], skin: [0.3, 0.012, 0.02],
+      seed: [0.035, 0.012, 0.005], shadowTint: [0.66, 0.6, 0.48],
+      ui: { flesh: [0.8, 0.66, 0.36] },
+    },
+    orchard: {
+      name: 'Orchard',
+      flesh: [0.93, 0.9, 0.58], fleshDeep: [0.72, 0.66, 0.34],
+      pale: [0.52, 0.4, 0.18], skin: [0.14, 0.4, 0.035],
+      seed: [0.03, 0.012, 0.005], shadowTint: [0.62, 0.62, 0.48],
+      ui: { flesh: [0.78, 0.72, 0.38] },
+    },
+    blush: {
+      name: 'Blush',
+      flesh: [0.96, 0.84, 0.5], fleshDeep: [0.8, 0.6, 0.28],
+      pale: [0.58, 0.4, 0.18], skin: [0.72, 0.22, 0.04],
+      seed: [0.04, 0.014, 0.006], shadowTint: [0.68, 0.58, 0.46],
+      ui: { flesh: [0.82, 0.64, 0.32] },
+    },
   },
 };
 
@@ -3403,23 +3660,38 @@ async function main() {
   let bodyTriEnd = renderMesh.body.count;
   let vComp = renderMesh.vComp;
 
-  let currentPalette = 'crimson';
-  const swatches = $('#swatches');
-  for (const [key, p] of Object.entries(PALETTES)) {
+  let currentFruit = 'melon', currentPalette = 'crimson';
+  const fruitsEl = $('#fruits'), swatches = $('#swatches');
+  for (const [key, f] of Object.entries(FRUITS)) {
     const b = document.createElement('button');
     b.type = 'button'; b.className = 'swatch'; b.dataset.key = key;
     b.setAttribute('role', 'radio');
-    b.setAttribute('aria-label', p.name + ' variety');
-    b.innerHTML = `<span class="chip"><i style="background:${hex(p.skin)}"></i><i style="background:${hex(p.pale.map(c => c * 0.95))}"></i><i style="background:${hex(p.ui.flesh)}"></i></span><span class="swname">${p.name}</span>`;
-    b.addEventListener('click', () => setPalette(key));
-    swatches.appendChild(b);
+    b.innerHTML = `<span class="swname">${f.name}</span>`;
+    b.addEventListener('click', () => setFruit(key));
+    fruitsEl.appendChild(b);
+  }
+  // the Variety row only offers the active fruit's own palettes
+  function showFruit(key) {
+    currentFruit = key;
+    for (const b of fruitsEl.children) b.setAttribute('aria-checked', String(b.dataset.key === key));
+    swatches.replaceChildren();
+    for (const [pk, p] of Object.entries(PALETTES[key])) {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'swatch'; b.dataset.key = pk;
+      b.setAttribute('role', 'radio');
+      b.setAttribute('aria-label', p.name + ' variety');
+      b.innerHTML = `<span class="chip"><i style="background:${hex(p.skin)}"></i><i style="background:${hex(p.pale.map(c => c * 0.95))}"></i><i style="background:${hex(p.ui.flesh)}"></i></span><span class="swname">${p.name}</span>`;
+      b.addEventListener('click', () => setPalette(pk));
+      swatches.appendChild(b);
+    }
+    setPalette(Object.keys(PALETTES[key])[0]);
   }
   function setPalette(key) {
     currentPalette = key;
     for (const b of swatches.children) b.setAttribute('aria-checked', String(b.dataset.key === key));
-    document.documentElement.style.setProperty('--accent', hex(PALETTES[key].ui.flesh));
+    document.documentElement.style.setProperty('--accent', hex(PALETTES[currentFruit][key].ui.flesh));
   }
-  setPalette('crimson');
+  showFruit('melon');
 
   let renderer;
   try {
@@ -3519,7 +3791,7 @@ async function main() {
     const aspect = W / H;
     const hf = r.h / cr.height, wf = r.w / cr.width;
     // fit the slice's footprint: wider than it is tall from this angle
-    const Rh = 1.32, Rv = 1.0;
+    const Rh = 1.32, Rv = Math.max(1, 0.45 + SHAPE.T * 0.5);   // a whole apple stands taller than a slice
     const t2 = Math.tan(FOV / 2);
     const dist = Math.max(Rv / (t2 * 0.9 * hf), Rh / (t2 * 0.92 * aspect * wf)) * state.zoom;
     const ce = Math.cos(state.el);
@@ -3983,12 +4255,26 @@ async function main() {
 
 
   $('#nudge').addEventListener('click', () => { if (!state.paused) sim.nudge(reduced.matches ? 0.45 : 1); });
-  const wholePiece = pieces[0];   // keeps its built meshes, so Reset is instant
+  let wholePiece = pieces[0];     // keeps its built meshes, so Reset is instant
   $('#reset').addEventListener('click', () => {
     knifeAnim = null; blade.mode = null;
     if (pieces.length > 1) installWorld([wholePiece]);
     sim.reset(reduced.matches ? 0 : 0.35); acc = 0;
   });
+  // a new fruit is a new specimen: fresh outline, meshes, seeds, sim and GPU buffers
+  function setFruit(key) {
+    if (key === currentFruit) return;
+    knifeAnim = null; blade.mode = null;
+    useFruit(key);
+    wholePiece = initialPiece();
+    installWorld([wholePiece]);
+    sim.reset(reduced.matches ? 0 : 0.35); acc = 0;
+    showFruit(key);
+    target[1] = home[1] = Math.max(0.24, SHAPE.T * 0.4);
+    canvas.setAttribute('aria-label', `Interactive 3D ${FRUIT.name.toLowerCase()} jelly slice. Drag it to stretch it, or switch to the knife and draw across it to cut it into pieces.`);
+    $('#nParticles').textContent = sim.n.toLocaleString('en');
+    $('#nTets').textContent = sim.nT.toLocaleString('en');
+  }
   // tools: hand (grab and pull) or knife (draw across the slice to cut it)
   const hint = $('#hintText');
   function setTool(t) {
@@ -4040,7 +4326,7 @@ async function main() {
   }
 
   // expose a small hook for automated checks
-  window.__melon = { sim, state, cam, pick, rayFrom, renderer, performCut, planCut, startCut, kp, blade, get knifeAnim() { return knifeAnim; }, setHover(x, y) { hoverX = x; hoverY = y; hoverSeen = true; },
+  window.__melon = { sim, state, cam, pick, rayFrom, renderer, performCut, planCut, startCut, setFruit, kp, blade, get knifeAnim() { return knifeAnim; }, setHover(x, y) { hoverX = x; hoverY = y; hoverSeen = true; },
     advance(sec) { for (let t = 0; t < sec - 1e-6; t += 1 / 60) { updateKnife(1 / 60, 1 / 60); sim.step(); } },
     compStats() { const c = sim.nComp, out = []; for (let k = 0; k < c; k++) { let n = 0, x = 0, y = 0, z = 0, v = 0; for (let i = 0; i < sim.n; i++) if (sim.comp[i] === k) { n++; x += sim.x[3 * i]; y += sim.x[3 * i + 1]; z += sim.x[3 * i + 2]; v = Math.max(v, Math.hypot(sim.v[3 * i], sim.v[3 * i + 1], sim.v[3 * i + 2])); } out.push([x / n, y / n, z / n, v].map(q => +q.toFixed(3))); } return out; }, get pieces() { return pieces.length; }, get fps() { return fps; } };
 
@@ -4067,8 +4353,8 @@ async function main() {
       hoverDirty = false;
       canvas.dataset.cursor = state.tool === 'knife' ? 'knife' : !state.paused && (pick(rayFrom(hoverX, hoverY)) || pickNear(hoverX, hoverY, 18)) ? 'grab' : '';
     }
-    renderer.setUniforms(cam, light, PALETTES[currentPalette], {
-      time: state.time, shape: [SHAPE.T, SHAPE.Ro, SHAPE.skin, SHAPE.pale],
+    renderer.setUniforms(cam, light, PALETTES[currentFruit][currentPalette], {
+      time: state.time, shape: [SHAPE.T, SHAPE.Ro || 0, SHAPE.skin, SHAPE.pale], kind: FRUIT.kind, prof: SHAPE.prof || [0, 0, 1, 0],
       exposure: 1.0, meshAlpha: state.showMesh ? 0.32 : 0, bg: BG_RENDER,
     });
     renderer.uploadGeometry(sim.x, state.showMesh);

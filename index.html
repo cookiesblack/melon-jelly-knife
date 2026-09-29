@@ -1331,6 +1331,7 @@ class SoftBody {
     this.totalRestVolume = vol;
     this.totalMass = 0;
     for (let i = 0; i < this.n; i++) { this.invMass[i] = 1 / this.mass[i]; this.totalMass += this.mass[i]; }
+    this.lastKE = Infinity;   // ≈ ½v², updated in step() — lets the renderer skip shadow/AO work once this settles
 
     // unique edges
     const set = new Map();
@@ -1424,6 +1425,7 @@ class SoftBody {
     this.prev.set(this.x);
     this.v.fill(0);
     this.endGrab();
+    this.lastKE = Infinity;
   }
 
   // stiffness mapping: firmness 0..1 → edge compliance (log scale)
@@ -1507,10 +1509,13 @@ class SoftBody {
     // settling: once the jelly is nearly still, bleed off the last residual jitter
     if (!this.grabbing) {
       const ke = this.kineticEnergy() / this.totalMass; // ≈ ½ v²
+      this.lastKE = ke;
       if (ke < 2e-3) {
         const f = Math.max(0.86, 1 - 0.14 * (1 - ke / 2e-3));
         for (let i = 0; i < this.v.length; i++) this.v[i] *= f;
       }
+    } else {
+      this.lastKE = Infinity;   // being dragged always counts as moving
     }
     // safety: any non-finite value → reset gently
     for (let i = 0; i < this.x.length; i += 97) if (!Number.isFinite(this.x[i])) { this.reset(0.2); break; }
@@ -2673,7 +2678,9 @@ class Renderer {
 
   capture() { return new Promise(r => { this.captureResolve = r; }); }
 
-  draw(showMesh) {
+  // shadowDirty: false once the piece has settled and neither the pose nor the knife is changing —
+  // the light-space shadow and top-down AO maps are then reused from the previous frame untouched.
+  draw(showMesh, shadowDirty = true) {
     if (this.lost) return;
     const d = this.device, m = this.mesh;
     const enc = d.createCommandEncoder();
@@ -2681,7 +2688,7 @@ class Renderer {
 
     // shadow map from the key light, and a top-down height map for contact occlusion
     const knife = this.knifeVisible && this.knifeDynBuf;
-    for (const [tex, bg] of [[this.shadowTex, this.bgLight], [this.topTex, this.bgTop]]) {
+    for (const [tex, bg] of shadowDirty ? [[this.shadowTex, this.bgLight], [this.topTex, this.bgTop]] : []) {
       const p = enc.beginRenderPass({ colorAttachments: [], depthStencilAttachment: { view: tex.createView(), depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' } });
       p.setPipeline(this.pDepth); p.setBindGroup(0, bg);
       p.setVertexBuffer(0, this.dynBuf); p.setIndexBuffer(this.indexBuf, 'uint32');
@@ -3418,7 +3425,9 @@ class GLRenderer {
 
   capture() { return new Promise(r => { this.captureResolve = r; }); }
 
-  draw(showMesh) {
+  // shadowDirty: false once the piece has settled and neither the pose nor the knife is changing —
+  // the light-space shadow and top-down AO maps are then reused from the previous frame untouched.
+  draw(showMesh, shadowDirty = true) {
     const gl = this.gl, m = this.mesh;
     if (this.lost || gl.isContextLost()) return;
     const W = this.w, H = this.h;
@@ -3430,20 +3439,22 @@ class GLRenderer {
     gl.disable(gl.BLEND);
 
     // shadow map from the key light, and a top-down height map for contact occlusion
-    gl.useProgram(this.pDepth);
-    gl.disable(gl.CULL_FACE);
-    gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(2, 2);
-    gl.depthMask(true); gl.depthFunc(gl.LESS); gl.clearDepth(1);
-    for (const [fbo, size, vp, isShadow] of [[this.fboShadow, this.shadowSize, this.lightVP, true], [this.fboTop, this.topSize, this.topVP, false]]) {
-      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
-      gl.viewport(0, 0, size, size);
-      gl.clear(gl.DEPTH_BUFFER_BIT);
-      gl.uniformMatrix4fv(this.locDepthM, false, vp);
-      gl.bindVertexArray(this.vaoMesh);
-      gl.drawElements(gl.TRIANGLES, bodyAndSeeds, U32, 0);
-      if (knife && isShadow) { gl.bindVertexArray(this.vaoKnife); gl.drawElements(gl.TRIANGLES, this.knifeCount, U32, 0); }
+    if (shadowDirty) {
+      gl.useProgram(this.pDepth);
+      gl.disable(gl.CULL_FACE);
+      gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(2, 2);
+      gl.depthMask(true); gl.depthFunc(gl.LESS); gl.clearDepth(1);
+      for (const [fbo, size, vp, isShadow] of [[this.fboShadow, this.shadowSize, this.lightVP, true], [this.fboTop, this.topSize, this.topVP, false]]) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+        gl.viewport(0, 0, size, size);
+        gl.clear(gl.DEPTH_BUFFER_BIT);
+        gl.uniformMatrix4fv(this.locDepthM, false, vp);
+        gl.bindVertexArray(this.vaoMesh);
+        gl.drawElements(gl.TRIANGLES, bodyAndSeeds, U32, 0);
+        if (knife && isShadow) { gl.bindVertexArray(this.vaoKnife); gl.drawElements(gl.TRIANGLES, this.knifeCount, U32, 0); }
+      }
+      gl.disable(gl.POLYGON_OFFSET_FILL);
     }
-    gl.disable(gl.POLYGON_OFFSET_FILL);
 
     // scene behind / inside the jelly (floor, seeds, bubbles, knife)
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboScene);
@@ -4348,7 +4359,11 @@ async function main() {
     skin();
     followSlice(dt);
     updateCamera();
-    updateLight();
+    // the shadow / contact-AO maps depend only on the piece's pose and the knife, never on the orbiting
+    // camera — once the piece has settled (and isn't being dragged or cut) they're reused frame to frame,
+    // matrices included, so the sampling in the main pass always matches whatever they last rendered
+    const shadowDirty = !state.paused && (sim.lastKE >= 2e-3 || renderer.knifeVisible);
+    if (shadowDirty) updateLight();
     if (hoverDirty && !drag.mode) {
       hoverDirty = false;
       canvas.dataset.cursor = state.tool === 'knife' ? 'knife' : !state.paused && (pick(rayFrom(hoverX, hoverY)) || pickNear(hoverX, hoverY, 18)) ? 'grab' : '';
@@ -4358,7 +4373,7 @@ async function main() {
       exposure: 1.0, meshAlpha: state.showMesh ? 0.32 : 0, bg: BG_RENDER,
     });
     renderer.uploadGeometry(sim.x, state.showMesh);
-    renderer.draw(state.showMesh);
+    renderer.draw(state.showMesh, shadowDirty);
     if (first) { first = false; setStatus(renderer.backend + ' · LIVE', 'live'); document.body.classList.add('ready'); }
     readoutT += dt; frames++; fpsT += dt;
     if (fpsT > 0.5) { fps = frames / ((now - fpsStart) / 1000); frames = 0; fpsT = 0; fpsStart = now; }
